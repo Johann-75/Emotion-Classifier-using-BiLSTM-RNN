@@ -66,6 +66,7 @@ def main():
     joblib.dump(tokenizer, "tokenizer.pkl")
 
     #  Load pretrained GloVe Embeddings 
+    # download embeddings through this link : https://nlp.stanford.edu/data/glove.6B.zip , the file size seems to be too high for uploading on GitHub
     glove_path = "glove.6B.100d.txt"  
     embedding_index = {}
     embedding_dim = 100
@@ -187,4 +188,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
