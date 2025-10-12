@@ -14,7 +14,6 @@ from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.callbacks import EarlyStopping
 
-# --- Updated Imports for Functional API and Attention ---
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
     Input,
@@ -31,10 +30,11 @@ from tensorflow.keras.optimizers import Adam
 
 # Download necessary NLTK resources
 nltk.download('punkt', quiet=True)
+nltk.download('punkt_tab', quiet=True)
 nltk.download('stopwords', quiet=True)
 nltk.download('wordnet', quiet=True)
 
-# ----------------- Preprocessing -----------------
+# Preprocessing
 def preprocess_text(text):
     if not isinstance(text, str):
         return ""
@@ -48,8 +48,8 @@ def preprocess_text(text):
     return " ".join(lemmatized_tokens)
 
 def main():
-    # ----------------- Load Data -----------------
-    df = pd.read_csv("2018-E-c-En-train.txt", sep="\t")  # Update path as needed
+    #  Load Data 
+    df = pd.read_csv("2018-E-c-En-train.txt", sep="\t")
     df['processed_text'] = df['Tweet'].apply(preprocess_text)
 
     emotions = ['anger', 'anticipation', 'disgust', 'fear', 'joy',
@@ -58,15 +58,15 @@ def main():
     X = df['processed_text'].values
     y = df[emotions].values  # multi-label
 
-    # ----------------- Tokenizer -----------------
-    voc_size = 5000
+    #  Tokenizer 
+    voc_size = 5000 # Limits the vocabulary to the top 5,000 most frequent words.
     tokenizer = Tokenizer(num_words=voc_size, oov_token="<OOV>")
     tokenizer.fit_on_texts(X)
-    sequences = tokenizer.texts_to_sequences(X)
+    sequences = tokenizer.texts_to_sequences(X) # Converts each tweet into a list of integers (word indices) assigned by the tokenizer
     joblib.dump(tokenizer, "tokenizer.pkl")
 
-    # ----------------- Load GloVe Embeddings -----------------
-    glove_path = "glove.6B.100d.txt"  # Update path as needed
+    #  Load pretrained GloVe Embeddings 
+    glove_path = "glove.6B.100d.txt"  
     embedding_index = {}
     embedding_dim = 100
 
@@ -85,24 +85,26 @@ def main():
         if vector is not None:
             embedding_matrix[i] = vector
 
-    # ----------------- Pad Sequences -----------------
+    # Padding Sequences
     sent_length = 50
-    X_padded = pad_sequences(sequences, padding='post', maxlen=sent_length)
+    X_padded = pad_sequences(sequences, padding='post', maxlen=sent_length) # put zeros in extra space
 
-    # ----------------- Train/Test Split -----------------
+    #  Train/Test Split 
     X_train, X_test, y_train, y_test = train_test_split(
         X_padded, y, test_size=0.2, random_state=42
     )
+
+    #Now we want to assign certain weights to each emotion based on their frequency in the dataset, to avoid bias towards common/always occurring emotions
+    
     pos_weights = []
     for i in range(y_train.shape[1]):  # For each of the 11 emotions
-        # Count negatives (0s) and positives (1s)
+        # Count negatives (0) and positives (1)
         neg = np.sum(y_train[:, i] == 0)
         pos = np.sum(y_train[:, i] == 1)
         # The weight is the ratio of negatives to positives
         pos_weights.append(neg / (pos + 1e-6))  # Added a small epsilon to avoid division by zero
 
-    # --- Define the weighted loss function ---
-    # This function will be passed to model.compile
+    # Weighted loss function passed to model.compile
     def weighted_binary_crossentropy(y_true, y_pred):
         return tf.nn.weighted_cross_entropy_with_logits(
             labels=tf.cast(y_true, tf.float32),
@@ -110,7 +112,8 @@ def main():
             pos_weight=tf.constant(pos_weights, dtype=tf.float32)
         )
 
-    # ----------------- ATTENTION MODEL (FUNCTIONAL API) 🚀 -----------------
+    #  FINAL MODEL
+    
     inputs = Input(shape=(sent_length,))
     x = Embedding(input_dim=voc_size, output_dim=embedding_dim,
                   weights=[embedding_matrix], input_length=sent_length, trainable=True)(inputs)
@@ -128,7 +131,7 @@ def main():
     x = Dropout(0.3)(x)
     x = Dense(64, activation='relu')(x)
     x = Dropout(0.3)(x)
-    outputs = Dense(11)(x)
+    outputs = Dense(11)(x)  #we want to get the logits values for calculating loss more effectively, later we will calculate probabilities using sigmoid
     # outputs = Dense(11, activation='sigmoid')(x)
 
     model = Model(inputs, outputs)
@@ -137,14 +140,14 @@ def main():
     # model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
     model.summary()
 
-    # ----------------- Training -----------------
+    #  Training 
     history = model.fit(X_train, y_train,
                         validation_data=(X_test, y_test),
                         epochs=30,
-                        callbacks=EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True)
+                        callbacks=EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True)  # check the last 3 epochs to check for any actual improvement, else quit
     )
 
-    # ----------------- Threshold Optimization -----------------
+    #  Threshold Optimization 
     y_pred_probs = model.predict(X_test)
     best_thresholds = []
     for i, emotion in enumerate(emotions):
@@ -159,7 +162,7 @@ def main():
     for i, thresh in enumerate(best_thresholds):
         y_pred[:, i] = (y_pred_probs[:, i] > thresh).astype(int)
 
-    # ----------------- F1 Scores -----------------
+    #  F1 Scores 
     f1_macro = f1_score(y_test, y_pred, average='macro')
     f1_micro = f1_score(y_test, y_pred, average='micro')
     print("Macro F1:", f1_macro)
@@ -167,15 +170,14 @@ def main():
 
     model.save("emotion_classifier.keras")
 
-    # ----------------- Test Prediction -----------------
-    # test_sentence = "I am absolutely livid! This is unacceptable!"
-    test_sentence = "Wait, what? I didn’t see that coming at all!"
+    #  Test Prediction 
+    test_sentence = "I am absolutely livid! This is unacceptable!"
+    # test_sentence = "Wait, what? I didn’t see that coming at all!"
     processed_test_sentence = preprocess_text(test_sentence)
     test_sequence = tokenizer.texts_to_sequences([processed_test_sentence])
     test_padded = pad_sequences(test_sequence, padding='post', maxlen=sent_length)
 
     prediction = model.predict(test_padded)
-    # predicted_emotions = dict(zip(emotions, prediction[0]))
     prediction_probs = tf.sigmoid(prediction).numpy()
     predicted_emotions_dict = dict(zip(emotions, prediction_probs[0]))
     sorted_predictions = sorted(predicted_emotions_dict.items(), key=lambda item: item[1], reverse=True)
@@ -185,3 +187,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
